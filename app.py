@@ -42,7 +42,7 @@ def categorize_columns(df):
         elif "ADMINISTRATIVE ARRANGEMENTS" in col_str:
             categories["ADMINISTRATIVE ARRANGEMENTS"].append(col)
         elif any(key in col_str for key in [
-            "PROGRAM OBJECTIVES", "LR MATERIALS",
+            "PROGRAM OBJECTIVES", "...",
             "CONTENT RELEVANCE", "RP/SUBJECT MATTER EXPERT KNOWLEDGE"
         ]):
             categories["SESSION"].append(col)
