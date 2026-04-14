@@ -1,24 +1,12 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import re
 
-from io import BytesIO
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
-from reportlab.lib.pagesizes import A4
-from reportlab.lib import colors
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import inch
-from reportlab.lib.enums import TA_CENTER
+st.set_page_config(page_title="Evaluation Dashboard FIXED", layout="wide")
+st.title("📊 Evaluation Dashboard (FIXED VERSION v2)")
 
 # =============================
-# PAGE CONFIG
-# =============================
-st.set_page_config(page_title="Evaluation Dashboard", layout="wide")
-st.title("📊 Evaluation Dashboard (Fixed Version)")
-
-# =============================
-# LOAD FILE
+# FILE LOADER
 # =============================
 def load_any_file(uploaded_file):
     try:
@@ -28,49 +16,78 @@ def load_any_file(uploaded_file):
         return pd.read_csv(uploaded_file)
 
 # =============================
-# HELPERS
+# SAFE AVG (NO STACK)
 # =============================
 def compute_avg_for_columns(df, cols):
     if not cols:
         return np.nan
-    sub = df[cols].copy()
+
+    cols = [c for c in cols if c in df.columns]
+    if not cols:
+        return np.nan
+
+    sub = df.loc[:, cols].copy()
+
+    # remove duplicate columns (IMPORTANT FIX)
+    sub = sub.loc[:, ~sub.columns.duplicated()]
+
     arr = pd.to_numeric(sub.to_numpy().ravel(), errors="coerce")
     return np.nanmean(arr)
 
-def generate_recommendations(weaknesses_df):
-    if weaknesses_df is None or weaknesses_df.empty:
-        return ["Continue maintaining current performance standards."]
+# =============================
+# CATEGORY SUMMARY SAFE
+# =============================
+def summarize_categories(df, rating_cols):
+    category_map = {}
 
-    recs = []
-    for _, row in weaknesses_df.head(3).iterrows():
-        recs.append(f"Improve {row['Category']} by enhancing delivery and resources.")
-    return recs
+    for col in rating_cols:
+        if "->" in str(col):
+            category = str(col).split("->")[0].strip()
+        else:
+            category = str(col).split("_")[0]
+        category_map[col] = category
+
+    rows = []
+    for col in rating_cols:
+        if col in df.columns:
+            val = pd.to_numeric(df[col], errors="coerce").mean()
+            rows.append({
+                "Category": category_map[col],
+                "Average": val
+            })
+
+    if not rows:
+        return pd.DataFrame()
+
+    cat_df = pd.DataFrame(rows)
+
+    # SAFE grouping (NO stack anywhere)
+    return cat_df.groupby("Category", as_index=False).mean()
 
 # =============================
 # UPLOAD
 # =============================
 uploaded_files = st.file_uploader(
-    "Upload CSV or Excel Files",
+    "Upload CSV / Excel",
     type=["csv", "xlsx", "xls"],
     accept_multiple_files=True
 )
 
-all_category_combined = []
-overall_all = []
+all_cat = []
 
 if uploaded_files:
 
-    for file in uploaded_files:
+    for f in uploaded_files:
 
         st.divider()
-        st.subheader(file.name)
+        st.subheader(f.name)
 
-        df = load_any_file(file)
+        df = load_any_file(f)
 
         if df is None:
             continue
 
-        st.success("Loaded")
+        st.success("Loaded successfully")
 
         df_num = df.apply(pd.to_numeric, errors="coerce")
 
@@ -78,55 +95,42 @@ if uploaded_files:
 
         rating_cols = [
             c for c in numeric_cols
-            if "id" not in c.lower() and "response" not in c.lower()
+            if "id" not in str(c).lower() and "response" not in str(c).lower()
         ]
 
-        if rating_cols:
-            overall_avg = compute_avg_for_columns(df, rating_cols)
-            overall_all.append(overall_avg)
+        if not rating_cols:
+            st.warning("No rating columns found")
+            continue
 
-            st.metric("Overall Rating", round(overall_avg, 2))
+        overall = compute_avg_for_columns(df, rating_cols)
+        st.metric("Overall Rating", round(overall, 2) if not np.isnan(overall) else 0)
 
-            category_map = {}
-            for col in rating_cols:
-                category_map[col] = col.split("_")[0]
+        cat_df = summarize_categories(df, rating_cols)
 
-            cat_data = []
-            for col in rating_cols:
-                cat_data.append({
-                    "Category": category_map[col],
-                    "Average": pd.to_numeric(df[col], errors="coerce").mean()
-                })
+        if not cat_df.empty:
+            st.dataframe(cat_df)
+            st.bar_chart(cat_df.set_index("Category"))
 
-            category_df = pd.DataFrame(cat_data)
-
-            category_avg = category_df.groupby("Category", as_index=False).mean()
-            category_avg["File"] = file.name
-
-            st.dataframe(category_avg)
-            st.bar_chart(category_avg.set_index("Category"))
-
-            all_category_combined.append(category_avg)
+            cat_df["File"] = f.name
+            all_cat.append(cat_df)
 
 # =============================
-# SUMMARY
+# CROSS FILE SUMMARY
 # =============================
-if all_category_combined:
+if all_cat:
 
-    combined = pd.concat(all_category_combined, ignore_index=True)
-    combined = combined.dropna(subset=["Average"])
+    merged = pd.concat(all_cat, ignore_index=True)
+    merged = merged.dropna(subset=["Average"])
 
-    summary = combined.groupby("Category", as_index=False)["Average"].mean()
+    summary = merged.groupby("Category", as_index=False)["Average"].mean()
 
-    strengths = summary.sort_values("Average", ascending=False).head(3)
-    weaknesses = summary.sort_values("Average", ascending=True).head(3)
+    st.divider()
+    st.subheader("📌 Cross-File Summary")
 
-    st.subheader("Top Strengths")
-    st.dataframe(strengths)
+    st.dataframe(summary)
 
-    st.subheader("Top Weaknesses")
-    st.dataframe(weaknesses)
+    st.subheader("🏆 Strengths")
+    st.dataframe(summary.sort_values("Average", ascending=False).head(3))
 
-    st.subheader("Recommendations")
-    for r in generate_recommendations(weaknesses):
-        st.write("•", r)
+    st.subheader("⚠ Weaknesses")
+    st.dataframe(summary.sort_values("Average").head(3))
